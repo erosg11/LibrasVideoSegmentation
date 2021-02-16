@@ -68,19 +68,13 @@ class LibrasVideoSegmentation:
         return results
 
     @staticmethod
-    def jump_frame(cap: cv2.VideoCapture, frame: int, fps: int):
-        cap.set(1, frame + fps/2)
-
-    @staticmethod
-    def iter_frames(video, step, end, fps):
+    def iter_frames(video, start, end):
         cap = cv2.VideoCapture(video)
         try:
-            LibrasVideoSegmentation.jump_frame(cap, step, fps)
-            i = step
-            while i < end - 1:
-                yield cap.read()[1], cap.read()[1]
-                i += step
-                LibrasVideoSegmentation.jump_frame(cap, i, fps)
+            cap.set(1, start)
+            last_frame = yield cap.read()[1]
+            for i in range(start, end):
+                last_frame = yield i, last_frame, cap.read()[1]
         finally:
             cap.release()
 
@@ -313,12 +307,15 @@ class LibrasVideoSegmentation:
         self.location_slice = slice(*self.legend_location[2:]), slice(*self.legend_location[:2])
         return self.legend_location
 
+    def save_frame(self, subtitle, candidate):
+        pass
 
     def alphabet_processing(self, candidates):
         i = 0
         avanco = 0
-        steps = len(candidates) - 1
-        while i < steps:
+        len_candidates = len(candidates)
+        end = len_candidates - 1
+        while i < end:
             self.video.set(1, candidates[i] + self.fps / 2 + avanco)
             frame = self.video.read()[1]
             slice_ = frame[self.location_slice]
@@ -328,7 +325,11 @@ class LibrasVideoSegmentation:
             frame = cv2.threshold(frame, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
             legenda = ocr.image_to_string(frame, lang="por", config='--psm 10')  # config psm 10 é para orientar a busca
             # por caracteres únicos
-            legenda = re.sub(u'[^A-Z ]', '', legenda.upper())
+            legenda = re.sub(u'[^A-Z]', '', legenda.upper())
+
+            len_legenda = len(legenda)
+            if len_legenda == 1 and i < len_candidates:
+                pass
 
 
 
