@@ -43,24 +43,19 @@ class LibrasVideoSegmentation:
 
     def calc_variations(self, equalize_hist: bool = True):
         self.video.set(1, 0)
-        in_queue = Queue(self.queue_size)
         out_queue = Queue()
+        results_size = self.length - 2
+        bins = np.linspace(0, results_size, N_CPU + 1).astype(np.uint64)
         if equalize_hist:
             processes = [Process(
-                target=self._calc_variation_equalized, args=(in_queue, out_queue)) for _ in range(N_CPU)]
+                target=self._calc_variation_equalized, args=(self.file, start, end, out_queue))
+                for start, end in zip(bins[:-1], bins[1:])]
         else:
             processes = [Process(
-                target=self._simple_calc_variation, args=(in_queue, out_queue)) for _ in range(N_CPU)]
+                target=self._simple_calc_variation, args=(self.file, start, end, out_queue))
+                for start, end in zip(bins[:-1], bins[1:])]
         for p in processes:
             p.start()
-        _, last_frame = self.video.read()
-        results_size = self.length - 2
-        for i in trange(results_size, desc="Calculating Variations"):
-            _, new_frame = self.video.read()
-            in_queue.put((i, last_frame, new_frame))
-            last_frame = new_frame
-        for _ in range(N_CPU):
-            in_queue.put(None)
         results = np.zeros(results_size)
         for _ in trange(results_size, desc='Collecting results'):
             i, val = out_queue.get()
@@ -79,28 +74,37 @@ class LibrasVideoSegmentation:
             cap.release()
 
     @staticmethod
-    def _calc_variation_equalized(in_queue: Queue, out_queue: Queue):
+    def _processes_variation_equalized(frame: np.ndarray):
+        return cv2.equalizeHist(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
+
+    @staticmethod
+    def _calc_variation_equalized(video: str, start: int, end: int, out_queue: Queue):
+        iter_frame = LibrasVideoSegmentation._processes_variation_equalized(video, start, end)
+        new_frame = LibrasVideoSegmentation._process_simple_variation(next(iter_frame))
         while True:
-            val = in_queue.get()
-            if val is None:
+            try:
+                i, last_frame, new_frame = iter_frame.send(new_frame)
+            except StopIteration:
                 return
-            i, last_frame, new_frame = val
-            last_frame = cv2.equalizeHist(cv2.cvtColor(last_frame, cv2.COLOR_BGR2GRAY))
-            new_frame = cv2.equalizeHist(cv2.cvtColor(new_frame, cv2.COLOR_BGR2GRAY))
+            new_frame = LibrasVideoSegmentation._processes_variation_equalized(new_frame)
             res = cv2.absdiff(last_frame, new_frame).astype(np.uint8)
             out_queue.put((i, ((np.count_nonzero(res) * 100) / res.size) ** 2))
 
     @staticmethod
-    def _simple_calc_variation(in_queue: Queue, out_queue: Queue):
+    def _process_simple_variation(frame: np.ndarray):
+        return cv2.threshold(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), 0, 255, cv2.THRESH_BINARY_INV |
+                                       cv2.THRESH_OTSU)[1]
+
+    @staticmethod
+    def _simple_calc_variation(video: str, start: int, end: int, out_queue: Queue):
+        iter_frame = LibrasVideoSegmentation.iter_frames(video, start, end)
+        new_frame = LibrasVideoSegmentation._process_simple_variation(next(iter_frame))
         while True:
-            val = in_queue.get()
-            if val is None:
+            try:
+                i, last_frame, new_frame = iter_frame.send(new_frame)
+            except StopIteration:
                 return
-            i, last_frame, new_frame = val
-            last_frame = cv2.threshold(cv2.cvtColor(last_frame, cv2.COLOR_BGR2GRAY), 0, 255, cv2.THRESH_BINARY_INV |
-                                       cv2.THRESH_OTSU)[1]
-            new_frame = cv2.threshold(cv2.cvtColor(new_frame, cv2.COLOR_BGR2GRAY), 0, 255, cv2.THRESH_BINARY_INV |
-                                       cv2.THRESH_OTSU)[1]
+            new_frame = LibrasVideoSegmentation._process_simple_variation(new_frame)
             res = cv2.absdiff(last_frame, new_frame).astype(np.uint8)
             out_queue.put((i, (np.count_nonzero(res) * 100) / res.size))
 
@@ -108,8 +112,7 @@ class LibrasVideoSegmentation:
         series = pd.Series(variations)
         window = series.rolling(win_size, center=True).sum()
         index_arr = np.asarray(window[(window >= 4.5) & (series > 1)].index.to_list())
-        print(index_arr.tolist())
-        return self.find_start_frames(index_arr, self.fps)
+        return np.append(self.find_start_frames(index_arr, self.fps), self.length)
 
     @staticmethod
     @jit(nopython=True)
@@ -340,10 +343,10 @@ class LibrasVideoSegmentation:
 if __name__ == '__main__':
     l = LibrasVideoSegmentation('E:\\Backups\\Cefet\\OneDrive - cefet-rj.br\\Dataset Lournco\\'
                                 'Vídeos\\Alfabeto Editado\\Alfabeto56.mp4', queue_size=200)
-    # variations = l.calc_variations(False)
-    variations = np.load('Variation_alfa56.npy')
+    variations = l.calc_variations(False)
+    # variations = np.load('Variation_alfa56.npy')
     print(variations)
-    np.save('Variation_alfa56', variations)
+    # np.save('Variation_alfa56', variations)
     candidates = l.get_candidates(variations, 9)
     print(list(candidates))
-    print(l.find_coord(candidates[0]))
+    # print(l.find_coord(candidates[0]))
