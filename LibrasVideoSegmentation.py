@@ -1,16 +1,17 @@
 import cv2
 import numpy as np
-import pytesseract.pytesseract as ocr
-from imutils.object_detection import non_max_suppression
+# import pytesseract.pytesseract as ocr
+# from imutils.object_detection import non_max_suppression
 import re
-import unidecode
+# import unidecode
 from os.path import isfile, split
 from pathlib import Path
 from multiprocessing import Queue, Process, cpu_count
 from tqdm import tqdm, trange
 import pandas as pd
 from numba import jit
-from win32api import MessageBox
+# from win32api import MessageBox
+from VariationCalcMethods import CALC_VARIATIONS_METHODS
 
 N_CPU = cpu_count()
 
@@ -18,7 +19,7 @@ N_CPU = cpu_count()
 class LibrasVideoSegmentation:
     SETUP = {"palavra", "alfabeto", "numerico", "frase", "naoembarcado"}
 
-    def __init__(self, file: str, setup: str = 'alfabeto', out_folder='imagens\\', queue_size: int = 200):
+    def __init__(self, file: str, setup: str = 'alfabeto', out_folder='imagens', queue_size: int = 200):
         if not isfile(file):
             raise FileNotFoundError(f"File '{file}' not found")
         if setup not in self.SETUP:
@@ -41,74 +42,29 @@ class LibrasVideoSegmentation:
         self.areas = []
         self.location_slice = None
 
-    def calc_variations(self, equalize_hist: bool = True):
+    def calc_variations(self, calc_method: str = 'OTSU_NON_ZEROS', *, save=False):
         self.video.set(1, 0)
         out_queue = Queue()
         results_size = self.length - 2
-        bins = np.linspace(0, results_size, N_CPU + 1).astype(np.uint64)
-        if equalize_hist:
-            processes = [Process(
-                target=self._calc_variation_equalized, args=(self.file, start, end, out_queue))
-                for start, end in zip(bins[:-1], bins[1:])]
-        else:
-            processes = [Process(
-                target=self._simple_calc_variation, args=(self.file, start, end, out_queue))
-                for start, end in zip(bins[:-1], bins[1:])]
+        bins = np.linspace(0, results_size, N_CPU + 1).astype(int)
+        try:
+            f = CALC_VARIATIONS_METHODS[calc_method]
+        except KeyError as e:
+            raise ValueError(f"""Method '{calc_method}' invalid, valid methods are '{"', '".join(
+                CALC_VARIATIONS_METHODS.keys())}'""") from e
+        processes = [Process(target=f, args=(self.file, start, end, out_queue))
+                     for start, end in zip(bins[:-1], bins[1:])]
         for p in processes:
             p.start()
         results = np.zeros(results_size)
-        for _ in trange(results_size, desc='Collecting results'):
+        for _ in trange(results_size, desc=f"Collecting results with method '{calc_method}'"):
             i, val = out_queue.get()
             results[i] = val
+        if save:
+            np.save(str(self.final_out_folder / calc_method), results)
         return results
 
-    @staticmethod
-    def iter_frames(video, start, end):
-        cap = cv2.VideoCapture(video)
-        try:
-            cap.set(1, start)
-            last_frame = yield cap.read()[1]
-            for i in range(start, end):
-                last_frame = yield i, last_frame, cap.read()[1]
-        finally:
-            cap.release()
-
-    @staticmethod
-    def _processes_variation_equalized(frame: np.ndarray):
-        return cv2.equalizeHist(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY))
-
-    @staticmethod
-    def _calc_variation_equalized(video: str, start: int, end: int, out_queue: Queue):
-        iter_frame = LibrasVideoSegmentation._processes_variation_equalized(video, start, end)
-        new_frame = LibrasVideoSegmentation._process_simple_variation(next(iter_frame))
-        while True:
-            try:
-                i, last_frame, new_frame = iter_frame.send(new_frame)
-            except StopIteration:
-                return
-            new_frame = LibrasVideoSegmentation._processes_variation_equalized(new_frame)
-            res = cv2.absdiff(last_frame, new_frame).astype(np.uint8)
-            out_queue.put((i, ((np.count_nonzero(res) * 100) / res.size) ** 2))
-
-    @staticmethod
-    def _process_simple_variation(frame: np.ndarray):
-        return cv2.threshold(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), 0, 255, cv2.THRESH_BINARY_INV |
-                                       cv2.THRESH_OTSU)[1]
-
-    @staticmethod
-    def _simple_calc_variation(video: str, start: int, end: int, out_queue: Queue):
-        iter_frame = LibrasVideoSegmentation.iter_frames(video, start, end)
-        new_frame = LibrasVideoSegmentation._process_simple_variation(next(iter_frame))
-        while True:
-            try:
-                i, last_frame, new_frame = iter_frame.send(new_frame)
-            except StopIteration:
-                return
-            new_frame = LibrasVideoSegmentation._process_simple_variation(new_frame)
-            res = cv2.absdiff(last_frame, new_frame).astype(np.uint8)
-            out_queue.put((i, (np.count_nonzero(res) * 100) / res.size))
-
-    def get_candidates(self, variations: np.ndarray, win_size):
+    def get_candidates(self, variations: np.ndarray, win_size=9):
         series = pd.Series(variations)
         window = series.rolling(win_size, center=True).sum()
         index_arr = np.asarray(window[(window >= 4.5) & (series > 1)].index.to_list())
@@ -121,7 +77,7 @@ class LibrasVideoSegmentation:
         while i < array.size:
             val = array[i]
             if val:
-                sliced_array = array[i+1:]
+                sliced_array = array[i + 1:]
                 sliced_array[sliced_array < val + distance] = -1
             i += 1
         return array[array != -1]
@@ -267,8 +223,8 @@ class LibrasVideoSegmentation:
         _, self.frame = self.video.read()
         self.areas, self.rect, self.frame = self.text_detection(self.frame)
         MessageBox(0, 'Selecione uma área ou arraste o cursor para criar uma nova.'
-                               '\n c - continuar \n r - redesenhar \n n - ir para o próximo frame',
-                            'Identifique a área da legenda')
+                      '\n c - continuar \n r - redesenhar \n n - ir para o próximo frame',
+                   'Identifique a área da legenda')
         clone = self.frame.copy()
         cv2.namedWindow("image", cv2.WND_PROP_FULLSCREEN)
         cv2.setWindowProperty("image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
@@ -301,7 +257,7 @@ class LibrasVideoSegmentation:
                                                                       self.legend_location[1][0])
 
         if self.legend_location and (self.legend_location[0][1] == self.legend_location[1][1] or
-                                          self.legend_location[0][0] == self.legend_location[1][0]):
+                                     self.legend_location[0][0] == self.legend_location[1][0]):
             print("Não é possível gerar um recorte a partir da área selecionada")
 
         self.legend_location = [refPt[0][1], refPt[1][1], refPt[0][0], refPt[1][0]]
@@ -335,18 +291,15 @@ class LibrasVideoSegmentation:
                 pass
 
 
-
-
-
-
-
 if __name__ == '__main__':
     l = LibrasVideoSegmentation('E:\\Backups\\Cefet\\OneDrive - cefet-rj.br\\Dataset Lournco\\'
                                 'Vídeos\\Alfabeto Editado\\Alfabeto56.mp4', queue_size=200)
-    variations = l.calc_variations(False)
+    print(l.fps)
+    # for method in CALC_VARIATIONS_METHODS:
+        # variations = l.calc_variations(method, save=True)
     # variations = np.load('Variation_alfa56.npy')
-    print(variations)
+    # print(variations)
     # np.save('Variation_alfa56', variations)
-    candidates = l.get_candidates(variations, 9)
-    print(list(candidates))
+    # candidates = l.get_candidates(variations, 9)
+    # print(list(candidates))
     # print(l.find_coord(candidates[0]))
