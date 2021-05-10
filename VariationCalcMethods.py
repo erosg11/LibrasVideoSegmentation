@@ -11,7 +11,11 @@ def _iter_frames(video: str, start: int, end: int):
     try:
         cap.set(1, start)
         for i in range(start - 1, end):
-            yield i, cap.read()[1]
+            ret, frame = cap.read()
+            if not ret:
+                print(f"\n\n\nError in frame {i} while loading file {video}.\n\n\n")
+                continue
+            yield i, frame
     finally:
         cap.release()
 
@@ -36,7 +40,7 @@ def _calc_equalized_sum(video: str, start: int, end: int, out_queue: Queue):
     for i, new_frame in iter_frame:
         new_frame = _processes_equalize_hist(new_frame)
         res = cv2.absdiff(last_frame, new_frame).astype(np.uint8)
-        out_queue.put((i, res.sum() ** 2))
+        out_queue.put((i, res.sum()))
         last_frame = new_frame
 
 
@@ -55,8 +59,16 @@ def _calc_otsu_non_zero(video: str, start: int, end: int, out_queue: Queue):
         last_frame = new_frame
 
 
+def runner(in_queue: Queue, out_queue: Queue):
+    while True:
+        video, start, end, method = in_queue.get()
+        CALC_VARIATIONS_METHODS[method](video, start, end, out_queue)
+
+
+
 CALC_VARIATIONS_METHODS = {
     'OTSU_NON_ZEROS': _calc_otsu_non_zero,
     'EQUALIZED_NON_ZEROS': _calc_equalized_non_zero,
     'EQUALIZED_SUM': _calc_equalized_sum,
 }
+

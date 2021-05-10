@@ -1,16 +1,16 @@
 import cv2
 import numpy as np
-# import pytesseract.pytesseract as ocr
-# from imutils.object_detection import non_max_suppression
+import pytesseract.pytesseract as ocr
+from imutils.object_detection import non_max_suppression
 import re
-# import unidecode
+import unidecode
 from os.path import isfile, split
 from pathlib import Path
 from multiprocessing import Queue, Process, cpu_count
 from tqdm import tqdm, trange
 import pandas as pd
 from numba import jit
-# from win32api import MessageBox
+from win32api import MessageBox
 from VariationCalcMethods import CALC_VARIATIONS_METHODS
 
 N_CPU = cpu_count()
@@ -42,24 +42,26 @@ class LibrasVideoSegmentation:
         self.areas = []
         self.location_slice = None
 
-    def calc_variations(self, calc_method: str = 'OTSU_NON_ZEROS', *, save=False):
-        self.video.set(1, 0)
-        out_queue = Queue()
-        results_size = self.length - 2
-        bins = np.linspace(0, results_size, N_CPU + 1).astype(int)
-        try:
-            f = CALC_VARIATIONS_METHODS[calc_method]
-        except KeyError as e:
+
+    def calc_variations(self, in_queue, out_queue, calc_method: str = 'OTSU_NON_ZEROS', *, save=False):
+        if calc_method not in CALC_VARIATIONS_METHODS:
             raise ValueError(f"""Method '{calc_method}' invalid, valid methods are '{"', '".join(
-                CALC_VARIATIONS_METHODS.keys())}'""") from e
-        processes = [Process(target=f, args=(self.file, start, end, out_queue))
-                     for start, end in zip(bins[:-1], bins[1:])]
-        for p in processes:
-            p.start()
+                CALC_VARIATIONS_METHODS.keys())}'""")
+
+        self.video.set(1, 0)
+        results_size = self.length - 2
+        bins = [int(x) for x in np.linspace(0, results_size, N_CPU + 1, dtype='uint64')]
+
+        for start, end in zip(bins[:-1], bins[1:]):
+            in_queue.put((self.file, start, end, calc_method))
+
         results = np.zeros(results_size)
-        for _ in trange(results_size, desc=f"Collecting results with method '{calc_method}'"):
-            i, val = out_queue.get()
-            results[i] = val
+        try:
+            for _ in trange(results_size, desc=f"Collecting results with method '{calc_method}'"):
+                i, val = out_queue.get(timeout=3)
+                results[i] = val
+        except BaseException as e:
+            print('Error', e, 'while collecting frames, probably missing frame')
         if save:
             np.save(str(self.final_out_folder / calc_method), results)
         return results

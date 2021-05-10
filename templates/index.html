@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="pt-br" xmlns="http://www.w3.org/1999/html" xmlns="http://www.w3.org/1999/html">
+    <head>
+        <title>Vizualização de dados dos vídeos</title>
+        <style>
+            body {
+  font-family: "Helvetica Neue", Helvetica, sans-serif;
+  font-size: 12px;
+	user-select: none;
+}
+svg {
+	box-shadow: 0px 0px 40px -5px rgba(0,0,0,0.3);
+	border-radius: 5px;
+	margin: 20px;
+    cursor: crosshair;
+}
+svg path {
+	fill: none;
+}
+svg circle {
+	fill: white;
+	stroke: #aaa;
+}
+svg .points-menu g {
+	opacity: 0.2;
+}
+svg .points-menu g.active {
+	cursor: pointer;
+	opacity: 1;
+}
+svg .points-menu line {
+	stroke: #777;
+	stroke-width: 3;
+}
+svg .points-menu rect {
+	fill: white;
+}
+.sidebar {
+	display: inline-block;
+	position: relative;
+	vertical-align: top;
+	margin-top: 20px;
+	width: 530px;
+	color: #444;
+}
+.sidebar .header {
+	font-size: 14px;
+	font-weight: bold;
+	text-align: right;
+	color: #aaa;
+	width: 100%;
+}
+.menu .item {
+	padding: 5px;
+	border: 1px solid #ddd;
+	margin: 4px 2px;
+	float: left;
+	cursor: pointer;
+	border-radius: 8px;
+	width: 160px;
+	text-align: center;
+}
+#graph {
+    float: left;
+}
+
+.sidebar .info {
+	float: left;
+	margin-top: 20px;
+	line-height: 1.5em;
+}
+        </style>
+        <script src="https://d3js.org/d3.v5.min.js"></script>
+    </head>
+    <body>
+    <div id="graph">
+      <svg width="700" height="400">
+      <g>
+        <path></path>
+      </g>
+    </svg>
+  </div>
+  <div class="sidebar">
+  	<div class="header">Seletor de dados</div>
+	  <div class="menu">
+          <label for="project">Selecione o projeto</label>
+          <select name="project" id="project"></select>
+          <br />
+          <label for="segment">Selecione o segmento</label>
+          <select name="segment" id="segment" ></select>
+          <br />
+          <label for="video">Selecione o video</label>
+          <select name="video" id="video" ></select>
+          <br />
+          <label for="param">Selecione o parâmetro</label>
+          <select name="param" id="param" >
+              <option value="filtered">Sinal filtrado</option>
+              <option value="variation">Sinal cru</option>
+              <option value="diff">Derivada primeira</option>
+              <option value="diff2">Derivada segunda</option>
+          </select>
+          <br />
+          <label for="critical">Incluir pontos críticos?</label>
+          <input type="checkbox" name="critical" id="critical" />
+          <br />
+      </div>
+	</div>
+        <script>
+var curveTypes = [
+	{name: 'curveLinear', curve: d3.curveLinear, active: true, lineString: '', clear: false, info: 'Interpolates the points using linear segments.'},
+	{name: 'curveBasis', curve: d3.curveBasis, active: false, lineString: '', clear: true, info: 'Interpolates the start and end points and approximates the inner points using a B-spline.'},
+	{name: 'curveBasisClosed', curve: d3.curveBasisClosed, active: false, lineString: '', clear: false, info: 'Uses a closed B-Spline to approximate the points.'},
+	{name: 'curveBundle (ß=0)', curve: d3.curveBundle.beta(0), active: false, lineString: '', clear: true, info: 'Same as curveBasis with the addition of a paramter ß which determines how close to a straight line the curve is. If ß=0 the curve is straight.'},
+	{name: 'curveBundle (ß=0.5)', curve: d3.curveBundle.beta(0.5), active: false, lineString: '', clear: false, info: 'Same as curveBasis with the addition of a paramter ß which determines how close to a straight line the curve is.'},
+	{name: 'curveBundle (ß=1)', curve: d3.curveBundle.beta(1), active: false, lineString: '', clear: false, info: 'Same as curveBasis with the addition of a paramter ß which determines how close to a straight line the curve is. If ß=1 the curve is the same as curveBasis.'},
+	{name: 'curveCardinal (tension=0)', curve: d3.curveCardinal.tension(0), active: false, lineString: '', clear: true, info: "Interpolates the points using a cubic B-spline. A tension parameter determines how 'taut' the curve is. As tension approaches 1 the segments become linear."},
+	{name: 'curveCardinal (tension=0.5)', curve: d3.curveCardinal.tension(0.5), active: false, lineString: '', clear: false, info: "Interpolates the points using a cubic B-spline. A tension parameter determines how 'taut' the curve is. As tension approaches 1 the segments become linear."},
+	{name: 'curveCardinal (tension=1)', curve: d3.curveCardinal.tension(1), active: false, lineString: '', clear: false, info: "Interpolates the points using a cubic B-spline. A tension parameter determines how 'taut' the curve is. As tension approaches 1 the segments become linear."},
+	{name: 'curveCatmullRom (α=0)', curve: d3.curveCatmullRom.alpha(0), active: false, lineString: '', clear: true, info: 'Similar to curveCardinal (tension=0) but with a parameter α that determines the parameterisation used to interpolate the points. If α=0 the parameterisation is uniform.'},
+	{name: 'curveCatmullRom (α=0.5)', curve: d3.curveCatmullRom.alpha(0.5), active: false, lineString: '', clear: false, info: 'Similar to curveCardinal (tension=0) but with a parameter α that determines the parameterisation used to interpolate the points. If α=0.5 the parameterisation is centripetal and self intersecting loops are avoided.'},
+	{name: 'curveCatmullRom (α=1)', curve: d3.curveCatmullRom.alpha(1), active: false, lineString: '', clear: false, info: 'Similar to curveCardinal (tension=0) but with a parameter α that determines the parameterisation used to interpolate the points. If α=1 the parameterisation is chordal.'},
+	{name: 'curveMonotoneX', curve: d3.curveMonotoneX, active: false, lineString: '', clear: true, info: 'Interpolates the points with a cubic spline which are monotonic (i.e. always increasing or always decreasing) in y.'},
+	{name: 'curveMonotoneY', curve: d3.curveMonotoneY, active: false, lineString: '', clear: false, info: 'Interpolates the points with a cubic spline which are monotonic (i.e. always increasing or always decreasing) in x.'},
+	{name: 'curveNatural', curve: d3.curveNatural, active: false, lineString: '', clear: true, info: 'Interpolates the points with a cubic spline with zero 2nd derivatives at the endpoints.'},
+	{name: 'curveStep', curve: d3.curveStep, active: false, lineString: '', clear: true, info: 'Interpolates the points with alternating horizontal and vertical linear segments. The vertical segments lie midway between points.'},
+	{name: 'curveStepAfter', curve: d3.curveStepAfter, active: false, lineString: '', clear: false, info: 'Interpolates the points with alternating horizontal and vertical linear segments. The y value changes after the x value.'},
+	{name: 'curveStepBefore', curve: d3.curveStepBefore, active: false, lineString: '', clear: false, info: 'Interpolates the points with alternating horizontal and vertical linear segments. The y value changes before the x value.'}
+];
+
+var lineGenerator = d3.line();
+
+var categoryScale = d3.scaleOrdinal(d3.schemeCategory10);
+function colorScale(d) {return d === 0 ? '#777' : categoryScale(d);}
+
+var points = [ ];
+var svg = d3.select('svg g');
+d3.select('svg').call(d3.zoom().on("zoom", function () {
+   svg.attr("transform", d3.event.transform)
+}))
+var projects = []
+var segments = []
+var videos = []
+var project = null;
+var segment = null;
+var video = null;
+var param = 'filtered';
+var critical = false;
+let project_combo = d3.select("select#project");
+let segment_combo = d3.select("select#segment")
+let video_combo = d3.select("select#video");
+let xScale, yScale;
+
+function color_of_point(d) {
+    switch (d.critical){
+        case 1:
+            return d3.color("#00FF00");
+        case -1:
+            return d3.color("#FF0000");
+        default:
+            return d3.color("#696969");
+    }
+}
+
+
+function fill_of_point(d){
+    switch (d.gesture_point){
+        case 1:
+            return d3.color("#00c4ff");
+        case -1:
+            return d3.color("#ffd500");
+        default:
+            return d3.color("#FFF");
+    }
+}
+
+
+var Tooltip = d3.select("#graph")
+    .append("div")
+    .style("opacity", 0)
+    .attr("class", "tooltip")
+    .style("background-color", "white")
+    .style("border", "solid")
+    .style("border-width", "2px")
+    .style("border-radius", "5px")
+    .style("padding", "5px")
+    .style('position', 'absolute')
+    .style('z-index', 99);
+
+var mouseover = function(d) {
+    console.log('Mouse entrou no ponto', d)
+    Tooltip
+      .style("opacity", 1)
+    d3.select(this)
+      .style("stroke", "black")
+      .style("opacity", 1)
+};
+var mousemove = function(d) {
+    Tooltip
+      .html(
+          'x: ' + Math.round(d.x * 100) / 100 + 's' +
+          "<br />y: " + d.y +
+          (d.gesture_point ? (d.gesture_point === 1 ? '<br /> Início' : '<br /> Fim') : '') +
+          (critical && d.critical? (d.critical === 1 ? '<br/>M&aacute;ximo' : '<br/>M&iacute;nimo') : ''))
+      .style("left", (d3.mouse(this)[0]+70) + "px")
+      .style("top", (d3.mouse(this)[1]) + "px")
+};
+var mouseleave = function(d) {
+    Tooltip
+      .style("opacity", 0)
+    d3.select(this)
+      .style("stroke", color_of_point(d))
+      .style("opacity", 0.8)
+};
+
+d3.json('/results').then(function (data){
+        console.log(data);
+        projects = data.results;
+        project_combo.html('');
+        project_combo.selectAll('option').data(projects).enter().append('option').attr("value", (d) => (d)).text((d) => {console.log(d); return d;});
+        _select_project(projects[0])
+    });
+
+function select_project(){
+    _select_project(d3.select(this).property('value'));
+}
+
+function _select_project(_project){
+    project = _project
+    d3.json('/results/' + _project).then(function (data) {
+        console.log(data);
+        segments = data.results;
+        segment_combo.html('');
+        segment_combo.selectAll('option').data(segments).enter().append('option').attr("value", (d) => (d)).text((d) => {console.log(d); return d;});
+        _select_segment(segments[0])
+    })
+}
+
+function select_segment(){
+    _select_segment(d3.select(this).property('value'));
+}
+
+function _select_segment(_segment){
+    segment = _segment
+    d3.json('/results/' + project + "/" + _segment).then(function (data) {
+        console.log(data);
+        videos = data.results;
+        video_combo.html('');
+        video_combo.selectAll('option').data(videos).enter().append('option').attr("value", (d) => (d)).text((d) => {console.log(d); return d;});
+        _select_video(videos[0])
+    })
+}
+
+function select_video(){
+    _select_video(d3.select(this).property('value'));
+}
+
+function _select_video(_video){
+    video = _video;
+    if(project == null || segment == null){
+        return;
+    }
+    call_api_for_graph();
+}
+
+function select_param(){
+    param = d3.select(this).property('value');
+    if(project == null || segment == null || video == null){
+        return;
+    }
+    call_api_for_graph();
+}
+
+function update_critical(){
+    critical = d3.select("#critical").property("checked");
+    if(project == null || segment == null || video == null){
+        return;
+    }
+    call_api_for_graph();
+}
+
+d3.select("#project").on('change', select_project);
+d3.select("#segment").on('change', select_segment);
+d3.select("#video").on('change', select_video);
+d3.select("#param").on('change', select_param);
+d3.select("#critical").on('change', update_critical);
+
+
+
+function updateMenu() {
+	var u = d3.select('.menu')
+		.selectAll('div.item')
+		.data(curveTypes);
+
+	u.enter()
+		.append('div')
+		.classed('item', true)
+		.style('clear', function(d) { return d.clear ? 'left' : 'none'; })
+		.text(function(d) { return d.name; })
+		.on('click', function(d) {
+			d.active = !d.active;
+			update();
+		})
+		.merge(u)
+		.style('background-color', function(d, i) { return d.active ? colorScale(i) : '#fff'; })
+		.style('color', function(d, i) { return d.active ? 'white' : '#444'; });
+}
+
+function updateScale(){
+    var max_x = d3.max(points, (d) => (d.x))
+    var max_y = d3.max(points, (d) => (d.y))
+
+  yScale = d3.scaleLinear()
+    .domain([0, max_y])
+    .range([20, 380]);
+
+  xScale = d3.scaleLinear()
+    .domain([0, max_x])
+    .range([10, 690]);
+}
+
+function updateLines() {
+	curveTypes.forEach(function(d) {
+		if(!d.active) return;
+		lineGenerator.curve(d.curve);
+		d.lineString = lineGenerator(points.map((d) => ([xScale(d.x), yScale(d.y)])));
+	});
+	let g = d3.select('svg g');
+    g.html('');
+	var u = g
+		.selectAll('path')
+		.data(curveTypes);
+
+	u.enter()
+		.append('path')
+		.merge(u)
+		.style('stroke', function(d, i) { return colorScale(i); })
+		.attr('d', function(d) { return d.lineString;	})
+		.style('display', function(d) { return d.active ? 'inline' : 'none'; });
+}
+
+function updatePoints() {
+    console.log("Atulizando os pontos")
+
+
+    var g = d3.select('g');
+	var u = g
+		.selectAll('circle')
+		.data(points);
+
+	u.enter()
+		.append('circle')
+		.attr('r', (d) => (d.critical || d.gesture_point ? 5 : 2))
+        .style('stroke', color_of_point)
+        .style('fill', fill_of_point)
+        .style("opacity", 0.8)
+		.merge(u)
+		.attr('cx', function(d) {console.log(d); return xScale(d.x);})
+		.attr('cy', function(d) { return yScale(d.y);})
+        .on("mouseover", mouseover)
+        .on("mousemove", mousemove)
+        .on("mouseleave", mouseleave);
+
+	u.exit().remove();
+
+}
+
+function update() {
+	updateMenu();
+	updateScale();
+	updateLines();
+	updatePoints();
+}
+
+update();
+function call_api_for_graph(){
+    d3.json('/results/' + project + '/' + segment + '/' +video + '/' + param + "?is_critical=" + (critical * 1)).then(function (d) {
+        console.log(d);
+        points = d.data;
+        update();
+    })
+}
+        </script>
+    </body>
+</html>
